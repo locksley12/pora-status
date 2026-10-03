@@ -7,6 +7,8 @@ name: checks
 on:
   schedule: [{cron: "*/5 * * * *"}]
   workflow_dispatch:
+  push:                    # наблюдатель обновил файлы проверок — прогон сразу, не ждём cron (03.10: cron
+    branches: [main]       # нового репозитория не запускался больше часа); результат идёт в ветку checks, не в main
 permissions:
   contents: write
 jobs:
