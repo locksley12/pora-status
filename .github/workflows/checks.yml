@@ -1,0 +1,38 @@
+# Внешние HTTP-проверки для наблюдателя (задача 29.1): раз в 5 минут с адресов GitHub (США), а не с амстердамской
+# машины — между Амстердамом и РФ нет прямого трафика. Сайты — sites.json. Результат — checks.json в ветку checks,
+# всегда одним коммитом. Решает не этот workflow, а наблюдатель: cron Actions опаздывает на 10–20 минут.
+# Репозиторий публичный (решение Олега 02.10): минуты Actions бесплатны, приватный упирался в лимит 2000/мес.
+# Этот файл — копия из locksley12/pora (observer/pora-status), сюда его кладёт наблюдатель при старте.
+name: checks
+on:
+  schedule: [{cron: "*/5 * * * *"}]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: main}
+      - name: Проверить сайты из sites.json
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, datetime
+          sites = json.load(open("sites.json"))
+          out = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "results": {}}
+          for name, url in sites.items():
+              r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-m", "20", "--retry", "1", "-w",
+                                  "%{http_code} %{time_total}", url], capture_output=True, text=True)
+              code, secs = (r.stdout.split() + ["0", "0"])[:2]
+              out["results"][name] = {"code": int(code), "ms": int(float(secs) * 1000)}
+          json.dump(out, open("/tmp/checks.json", "w"), ensure_ascii=False, indent=1)
+          print(json.dumps(out, ensure_ascii=False))
+          PY
+      - name: В ветку checks — одним коммитом
+        run: |
+          cd "$(mktemp -d)" && git init -q && git checkout -q --orphan checks
+          cp /tmp/checks.json . && git add checks.json
+          git -c user.name=checks -c user.email=checks@pora commit -qm checks
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" checks
