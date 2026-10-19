@@ -30,6 +30,15 @@ jobs:
                                   "%{http_code} %{time_total}", url], capture_output=True, text=True)
               code, secs = (r.stdout.split() + ["0", "0"])[:2]
               out["results"][name] = {"code": int(code), "ms": int(float(secs) * 1000)}
+          # «Сводный отчёт компании» ERP (19.10.2026): публичная отметка — только даты последнего отчёта и сегодня
+          # по Москве. Наблюдатель после 10:40 МСК бьёт тревогу, если сегодняшнего отчёта нет.
+          r = subprocess.run(["curl", "-s", "-m", "20", "--retry", "1", "https://erp.hilari.ru/api/company-report/pulse"],
+                             capture_output=True, text=True)
+          try:
+              p = json.loads(r.stdout)
+              out["erp_digest"] = {"last": p.get("last_digest"), "today": p.get("today")}
+          except ValueError:
+              pass
           json.dump(out, open("/tmp/checks.json", "w"), ensure_ascii=False, indent=1)
           print(json.dumps(out, ensure_ascii=False))
           PY
