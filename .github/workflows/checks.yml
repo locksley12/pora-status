@@ -1,0 +1,50 @@
+# Внешние HTTP-проверки для наблюдателя (задача 29.1): раз в 5 минут с адресов GitHub (США), а не с амстердамской
+# машины — между Амстердамом и РФ нет прямого трафика. Сайты — sites.json. Результат — checks.json в ветку checks,
+# всегда одним коммитом. Решает не этот workflow, а наблюдатель. Запускает его тоже наблюдатель (workflow_dispatch,
+# раз в 5 минут): cron GitHub 03.10 дал два прогона за 9 часов. Cron ниже — запасной, раз в 6 часов.
+# Репозиторий публичный (решение Олега 02.10): минуты Actions бесплатны, приватный упирался в лимит 2000/мес.
+# Этот файл — копия из locksley12/pora (observer/pora-status), сюда его кладёт наблюдатель при старте.
+name: checks
+on:
+  schedule: [{cron: "0 */6 * * *"}]   # запасной: основной путь — наблюдатель запускает проверки сам раз в 5 минут
+  workflow_dispatch:
+  push:                    # наблюдатель обновил файлы проверок — прогон сразу, не ждём cron (03.10: cron
+    branches: [main]       # нового репозитория не запускался больше часа); результат идёт в ветку checks, не в main
+permissions:
+  contents: write
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: main}
+      - name: Проверить сайты из sites.json
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, datetime
+          sites = json.load(open("sites.json"))
+          out = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "results": {}}
+          for name, url in sites.items():
+              r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-m", "20", "--retry", "1", "-w",
+                                  "%{http_code} %{time_total}", url], capture_output=True, text=True)
+              code, secs = (r.stdout.split() + ["0", "0"])[:2]
+              out["results"][name] = {"code": int(code), "ms": int(float(secs) * 1000)}
+          # «Сводный отчёт компании» ERP (19.10.2026): публичная отметка — только даты последнего отчёта и сегодня
+          # по Москве. Наблюдатель после 10:40 МСК бьёт тревогу, если сегодняшнего отчёта нет.
+          r = subprocess.run(["curl", "-s", "-m", "20", "--retry", "1", "https://erp.hilari.ru/api/company-report/pulse"],
+                             capture_output=True, text=True)
+          try:
+              p = json.loads(r.stdout)
+              out["erp_digest"] = {"last": p.get("last_digest"), "today": p.get("today")}
+          except ValueError:
+              pass
+          json.dump(out, open("/tmp/checks.json", "w"), ensure_ascii=False, indent=1)
+          print(json.dumps(out, ensure_ascii=False))
+          PY
+      - name: В ветку checks — одним коммитом
+        run: |
+          cd "$(mktemp -d)" && git init -q && git checkout -q --orphan checks
+          cp /tmp/checks.json . && git add checks.json
+          git -c user.name=checks -c user.email=checks@pora commit -qm checks
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" checks
